@@ -1,10 +1,16 @@
 {
-  "description": "Inject 800ms network latency to DynamoDB connections",
+  "description": "Inject network latency to DynamoDB connections for ECS service tasks",
   "targets": {
     "myTasks": {
       "resourceType": "aws:ecs:task",
-      "resourceArns": [
-        "arn:aws:ecs:us-east-1:064250592128:task/FIS/TASK_ID"
+      "resourceTags": {
+        "aws:ecs:serviceName": "dynamodb-test-service"
+      },
+      "filters": [
+        {
+          "path": "Cluster",
+          "values": ["FIS"]
+        }
       ],
       "selectionMode": "ALL"
     }

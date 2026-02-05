@@ -329,43 +329,148 @@ aws logs tail /ecs/dynamodb-latency-test --follow
 
 ## Fault Injection Testing with AWS FIS
 
-### Create FIS Experiment Template
+AWS FIS allows you to inject network latency to test how your application handles slow DynamoDB connections.
 
-The `fis-experiment-template.json` file is ready to use. Just replace TASK_ID with your actual task ID after running the task.
+### Prerequisites
 
-To get your task ID after running the task:
+1. Ensure your ECS task definition has `enableFaultInjection: true` (already configured)
+2. Ensure your ECS task definition has `pidMode: task` (already configured)
+3. The SSM agent sidecar container is running (already configured)
+4. The fisExperimentRole has proper permissions (already configured)
+
+### Option 1: Target Specific Tasks (fis-experiment-template.json)
+
+Use this when you want to test specific task ARNs.
+
+**Get your task ARNs:**
 ```bash
-aws ecs list-tasks --cluster FIS --query 'taskArns[0]' --output text
+# List all tasks in the service
+aws ecs list-tasks \
+  --cluster FIS \
+  --service-name dynamodb-test-service \
+  --region us-east-1
+
+# Or get a specific task ARN
+aws ecs list-tasks \
+  --cluster FIS \
+  --service-name dynamodb-test-service \
+  --query 'taskArns[0]' \
+  --output text \
+  --region us-east-1
 ```
 
-### Run the Experiment
+**Update the template:**
+Edit `fis-experiment-template.json` and replace `TASK_ID` with your actual task ID.
 
+**Create and run the experiment:**
 ```bash
 # Create the experiment template
 TEMPLATE_ID=$(aws fis create-experiment-template \
   --cli-input-json file://fis-experiment-template.json \
   --query 'experimentTemplate.id' \
-  --output text)
+  --output text \
+  --region us-east-1)
+
+echo "Template ID: $TEMPLATE_ID"
 
 # Start the experiment
 EXPERIMENT_ID=$(aws fis start-experiment \
   --experiment-template-id $TEMPLATE_ID \
   --query 'experiment.id' \
-  --output text)
+  --output text \
+  --region us-east-1)
 
 echo "Experiment started: $EXPERIMENT_ID"
-
-# Monitor the experiment
-aws fis get-experiment --id $EXPERIMENT_ID
 ```
 
-### Monitor Results
+### Option 2: Target All Tasks in Service (fis-experiment-template-service.json)
 
-Watch the CloudWatch logs to see the latency impact:
+Use this to automatically target all tasks in the `dynamodb-test-service` service.
 
+**Create and run the experiment:**
+```bash
+# Create the experiment template
+TEMPLATE_ID=$(aws fis create-experiment-template \
+  --cli-input-json file://fis-experiment-template-service.json \
+  --query 'experimentTemplate.id' \
+  --output text \
+  --region us-east-1)
+
+echo "Template ID: $TEMPLATE_ID"
+
+# Start the experiment
+EXPERIMENT_ID=$(aws fis start-experiment \
+  --experiment-template-id $TEMPLATE_ID \
+  --query 'experiment.id' \
+  --output text \
+  --region us-east-1)
+
+echo "Experiment started: $EXPERIMENT_ID"
+```
+
+### Monitor the Experiment
+
+**Check experiment status:**
+```bash
+aws fis get-experiment \
+  --id $EXPERIMENT_ID \
+  --region us-east-1
+```
+
+**Watch the application logs to see latency impact:**
 ```bash
 aws logs tail /ecs/dynamodb-latency-test --follow --filter-pattern "Round trip"
 ```
+
+**Test the interactive endpoint during the experiment:**
+```bash
+# Replace with your NLB DNS name
+curl http://dynamodb-test-nlb-7897fc06ba9f2b32.elb.us-east-1.amazonaws.com/test
+```
+
+### Expected Behavior
+
+**Normal (no fault injection):**
+- Round trip time: ~10-50ms
+- Health checks: PASSED (200)
+- `/test` endpoint: Returns success in ~10-50ms
+
+**During 800ms latency injection:**
+- Round trip time: ~800-850ms
+- With CONNECTION_TIMEOUT=0.5s and READ_TIMEOUT=0.5s: Timeout errors
+- Health checks: FAILED (503) after 30 seconds of failures
+- `/test` endpoint: Returns 500 with timeout error
+
+**Experiment Parameters:**
+- **duration**: PT5M (5 minutes)
+- **delayMilliseconds**: 800 (adds 800ms delay)
+- **jitterMilliseconds**: 50 (adds random 0-50ms variation)
+- **sources**: DYNAMODB (only affects DynamoDB traffic)
+- **useEcsFaultInjectionEndpoints**: true (uses ECS Fault Injection APIs)
+
+### Stop an Experiment Early
+
+```bash
+aws fis stop-experiment \
+  --id $EXPERIMENT_ID \
+  --region us-east-1
+```
+
+### List All Experiment Templates
+
+```bash
+aws fis list-experiment-templates --region us-east-1
+```
+
+### Delete an Experiment Template
+
+```bash
+aws fis delete-experiment-template \
+  --id $TEMPLATE_ID \
+  --region us-east-1
+```
+
+## Troubleshooting
 
 Expected behavior:
 - Normal: ~10-50ms round trip time
