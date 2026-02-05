@@ -102,6 +102,61 @@ def health_check():
     
     return jsonify(response), status_code
 
+@app.route('/test', methods=['GET'])
+def test_now():
+    """Interactive endpoint to trigger a DynamoDB test on demand"""
+    start_time = time.time()
+    
+    try:
+        # Scan the table to read items (limit to 10 items for efficiency)
+        response = dynamodb.scan(
+            TableName=TABLE_NAME,
+            Limit=10
+        )
+        
+        end_time = time.time()
+        round_trip_ms = (end_time - start_time) * 1000
+        
+        item_count = len(response.get('Items', []))
+        scanned_count = response.get('ScannedCount', 0)
+        
+        result = {
+            "status": "success",
+            "table": TABLE_NAME,
+            "round_trip_ms": round(round_trip_ms, 2),
+            "items_returned": item_count,
+            "items_scanned": scanned_count,
+            "timestamp": datetime.now().isoformat(),
+            "configuration": {
+                "connection_timeout": CONNECTION_TIMEOUT,
+                "read_timeout": READ_TIMEOUT
+            }
+        }
+        
+        logger.info(f"INTERACTIVE TEST - SUCCESS - Round trip time: {round_trip_ms:.2f}ms - Items: {item_count}")
+        return jsonify(result), 200
+        
+    except Exception as e:
+        end_time = time.time()
+        round_trip_ms = (end_time - start_time) * 1000
+        error_type = type(e).__name__
+        
+        result = {
+            "status": "failed",
+            "table": TABLE_NAME,
+            "round_trip_ms": round(round_trip_ms, 2),
+            "error_type": error_type,
+            "error_message": str(e),
+            "timestamp": datetime.now().isoformat(),
+            "configuration": {
+                "connection_timeout": CONNECTION_TIMEOUT,
+                "read_timeout": READ_TIMEOUT
+            }
+        }
+        
+        logger.error(f"INTERACTIVE TEST - FAILED - Round trip time: {round_trip_ms:.2f}ms - Error: {error_type} - {str(e)}")
+        return jsonify(result), 500
+
 @app.route('/', methods=['GET'])
 def root():
     """Root endpoint with service info"""
@@ -110,7 +165,8 @@ def root():
         "table": TABLE_NAME,
         "endpoints": {
             "health": "/health",
-            "stats": "/stats"
+            "stats": "/stats",
+            "test": "/test - Run an interactive DynamoDB test"
         }
     })
 
