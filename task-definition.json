@@ -21,15 +21,15 @@
       ],
       "environment": [
         {
-          "name": "CONNECTION_TIMEOUT",
-          "value": "0.5"
+          "name": "CONNECTION_TIMEOUT_MS",
+          "value": "500"
         },
         {
-          "name": "READ_TIMEOUT",
-          "value": "0.5"
+          "name": "READ_TIMEOUT_MS",
+          "value": "500"
         },
         {
-          "name": "TEST_INTERVAL",
+          "name": "TEST_INTERVAL_SECONDS",
           "value": "5"
         }
       ],

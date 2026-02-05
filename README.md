@@ -221,7 +221,8 @@ aws elbv2 create-target-group \
   --vpc-id vpc-03630343ff89a1161 \
   --target-type ip \
   --health-check-enabled \
-  --health-check-protocol TCP \
+  --health-check-protocol HTTP \
+  --health-check-path /health \
   --health-check-interval-seconds 30 \
   --healthy-threshold-count 2 \
   --unhealthy-threshold-count 2 \
@@ -230,21 +231,59 @@ aws elbv2 create-target-group \
 # Note the TargetGroupArn from the output
 ```
 
-**Step 7.2: Create Network Load Balancer**
+**Step 7.2: Create Security Group for NLB**
 
 ```bash
-# Create NLB (use at least 2 subnets in different AZs)
+# Create security group for NLB
+aws ec2 create-security-group \
+  --group-name dynamodb-test-nlb-sg \
+  --description "Security group for DynamoDB test NLB - restrict access" \
+  --vpc-id vpc-03630343ff89a1161 \
+  --region us-east-1
+
+# Note the GroupId from the output (e.g., sg-xxxxx)
+
+# Allow HTTP access from your IP only (replace YOUR_IP with your actual IP)
+aws ec2 authorize-security-group-ingress \
+  --group-id sg-xxxxx \
+  --protocol tcp \
+  --port 80 \
+  --cidr YOUR_IP/32 \
+  --region us-east-1
+
+# Optional: Allow access from your office/VPN CIDR range
+# aws ec2 authorize-security-group-ingress \
+#   --group-id sg-xxxxx \
+#   --protocol tcp \
+#   --port 80 \
+#   --cidr 10.0.0.0/8 \
+#   --region us-east-1
+
+# Get your current public IP
+curl -s https://checkip.amazonaws.com
+```
+
+**Step 7.3: Create Network Load Balancer with Security Group**
+
+```bash
+# Create NLB with security group (use at least 2 subnets in different AZs)
 aws elbv2 create-load-balancer \
   --name dynamodb-test-nlb \
   --type network \
   --scheme internet-facing \
   --subnets subnet-074e81a195f80085b subnet-0ba641874c881911e \
+  --security-groups sg-xxxxx \
   --region us-east-1
 
 # Note the LoadBalancerArn from the output
 ```
 
-**Step 7.3: Create Listener**
+**Important Notes:**
+- NLB security groups are only supported for NLBs created after August 2023
+- If you get an error about security groups not being supported, remove the `--security-groups` parameter and use security groups on the ECS tasks instead
+- Replace `YOUR_IP/32` with your actual IP address (get it from `curl https://checkip.amazonaws.com`)
+
+**Step 7.4: Create Listener**
 
 ```bash
 # Create listener to forward traffic to target group
@@ -257,7 +296,7 @@ aws elbv2 create-listener \
   --region us-east-1
 ```
 
-**Step 7.4: Create ECS Service with NLB**
+**Step 7.5: Create ECS Service with NLB**
 
 ```bash
 # Create ECS service with load balancer integration
@@ -274,7 +313,7 @@ aws ecs create-service \
   --region us-east-1
 ```
 
-**Step 7.5: Get NLB DNS Name**
+**Step 7.6: Get NLB DNS Name**
 
 ```bash
 # Get the DNS name to access your service
@@ -282,6 +321,32 @@ aws elbv2 describe-load-balancers \
   --names dynamodb-test-nlb \
   --query 'LoadBalancers[0].DNSName' \
   --output text \
+  --region us-east-1
+```
+
+**Update NLB Security Group (if needed):**
+
+```bash
+# Add another IP address to allowed list
+aws ec2 authorize-security-group-ingress \
+  --group-id sg-xxxxx \
+  --protocol tcp \
+  --port 80 \
+  --cidr ANOTHER_IP/32 \
+  --region us-east-1
+
+# Remove an IP address from allowed list
+aws ec2 revoke-security-group-ingress \
+  --group-id sg-xxxxx \
+  --protocol tcp \
+  --port 80 \
+  --cidr OLD_IP/32 \
+  --region us-east-1
+
+# View current security group rules
+aws ec2 describe-security-groups \
+  --group-ids sg-xxxxx \
+  --query 'SecurityGroups[0].IpPermissions' \
   --region us-east-1
 ```
 
@@ -437,7 +502,7 @@ curl http://dynamodb-test-nlb-7897fc06ba9f2b32.elb.us-east-1.amazonaws.com/test
 
 **During 800ms latency injection:**
 - Round trip time: ~800-850ms
-- With CONNECTION_TIMEOUT=0.5s and READ_TIMEOUT=0.5s: Timeout errors
+- With CONNECTION_TIMEOUT_MS=500 and READ_TIMEOUT_MS=500: Timeout errors
 - Health checks: FAILED (503) after 30 seconds of failures
 - `/test` endpoint: Returns 500 with timeout error
 
@@ -507,9 +572,9 @@ The application supports the following environment variables for timeout configu
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `TABLE_NAME` | MyTestTable | Name of the DynamoDB table to read from |
-| `CONNECTION_TIMEOUT` | 5.0 | Connection timeout in seconds (time to establish connection) |
-| `READ_TIMEOUT` | 5.0 | Read timeout in seconds (time to receive response) |
-| `TEST_INTERVAL` | 5 | Seconds between each DynamoDB connection test |
+| `CONNECTION_TIMEOUT_MS` | 5000 | Connection timeout in milliseconds (time to establish connection) |
+| `READ_TIMEOUT_MS` | 5000 | Read timeout in milliseconds (time to receive response) |
+| `TEST_INTERVAL_SECONDS` | 5 | Seconds between each DynamoDB connection test |
 
 ### Timeout Configuration Examples
 
@@ -517,12 +582,12 @@ The application supports the following environment variables for timeout configu
 ```json
 "environment": [
   {
-    "name": "CONNECTION_TIMEOUT",
-    "value": "0.5"
+    "name": "CONNECTION_TIMEOUT_MS",
+    "value": "500"
   },
   {
-    "name": "READ_TIMEOUT",
-    "value": "0.5"
+    "name": "READ_TIMEOUT_MS",
+    "value": "500"
   }
 ]
 ```
@@ -532,12 +597,12 @@ Result: With 800ms injected latency, requests will timeout (500ms < 800ms)
 ```json
 "environment": [
   {
-    "name": "CONNECTION_TIMEOUT",
-    "value": "2.0"
+    "name": "CONNECTION_TIMEOUT_MS",
+    "value": "2000"
   },
   {
-    "name": "READ_TIMEOUT",
-    "value": "2.0"
+    "name": "READ_TIMEOUT_MS",
+    "value": "2000"
   }
 ]
 ```
@@ -547,12 +612,12 @@ Result: With 800ms injected latency, requests will succeed (2000ms > 800ms)
 ```json
 "environment": [
   {
-    "name": "CONNECTION_TIMEOUT",
-    "value": "0.85"
+    "name": "CONNECTION_TIMEOUT_MS",
+    "value": "850"
   },
   {
-    "name": "READ_TIMEOUT",
-    "value": "0.85"
+    "name": "READ_TIMEOUT_MS",
+    "value": "850"
   }
 ]
 ```
@@ -561,9 +626,9 @@ Result: With 800ms latency + 50ms jitter, some requests succeed, some timeout
 ### Current Configuration
 
 The task definition is configured with:
-- `CONNECTION_TIMEOUT`: 0.5 seconds (500ms)
-- `READ_TIMEOUT`: 0.5 seconds (500ms)
-- `TEST_INTERVAL`: 5 seconds
+- `CONNECTION_TIMEOUT_MS`: 500ms
+- `READ_TIMEOUT_MS`: 500ms
+- `TEST_INTERVAL_SECONDS`: 5 seconds
 
 This means when you inject 800ms latency, the application will experience timeout errors, simulating real-world connection failures.
 

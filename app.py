@@ -16,11 +16,15 @@ logger = logging.getLogger(__name__)
 
 # Get configuration from environment variables
 TABLE_NAME = os.getenv('TABLE_NAME', 'MyTestTable')
-CONNECTION_TIMEOUT = float(os.getenv('CONNECTION_TIMEOUT', '5.0'))  # seconds
-READ_TIMEOUT = float(os.getenv('READ_TIMEOUT', '5.0'))  # seconds
-TEST_INTERVAL = int(os.getenv('TEST_INTERVAL', '5'))  # seconds between tests
+CONNECTION_TIMEOUT_MS = int(os.getenv('CONNECTION_TIMEOUT_MS', '5000'))  # milliseconds
+READ_TIMEOUT_MS = int(os.getenv('READ_TIMEOUT_MS', '5000'))  # milliseconds
+TEST_INTERVAL_SECONDS = int(os.getenv('TEST_INTERVAL_SECONDS', '5'))  # seconds between tests
 
-logger.info(f"Configuration: TABLE_NAME={TABLE_NAME}, CONNECTION_TIMEOUT={CONNECTION_TIMEOUT}s, READ_TIMEOUT={READ_TIMEOUT}s, TEST_INTERVAL={TEST_INTERVAL}s")
+# Convert milliseconds to seconds for boto3
+CONNECTION_TIMEOUT = CONNECTION_TIMEOUT_MS / 1000.0
+READ_TIMEOUT = READ_TIMEOUT_MS / 1000.0
+
+logger.info(f"Configuration: TABLE_NAME={TABLE_NAME}, CONNECTION_TIMEOUT={CONNECTION_TIMEOUT_MS}ms, READ_TIMEOUT={READ_TIMEOUT_MS}ms, TEST_INTERVAL={TEST_INTERVAL_SECONDS}s")
 
 # Configure boto3 client with custom timeouts
 boto_config = Config(
@@ -134,8 +138,8 @@ def test_now():
             "items_scanned": scanned_count,
             "timestamp": datetime.now().isoformat(),
             "configuration": {
-                "connection_timeout": CONNECTION_TIMEOUT,
-                "read_timeout": READ_TIMEOUT
+                "connection_timeout_ms": CONNECTION_TIMEOUT_MS,
+                "read_timeout_ms": READ_TIMEOUT_MS
             }
         }
         
@@ -155,8 +159,8 @@ def test_now():
             "error_message": str(e),
             "timestamp": datetime.now().isoformat(),
             "configuration": {
-                "connection_timeout": CONNECTION_TIMEOUT,
-                "read_timeout": READ_TIMEOUT
+                "connection_timeout_ms": CONNECTION_TIMEOUT_MS,
+                "read_timeout_ms": READ_TIMEOUT_MS
             }
         }
         
@@ -190,9 +194,9 @@ def stats():
         "last_error": last_error,
         "configuration": {
             "table_name": TABLE_NAME,
-            "connection_timeout": CONNECTION_TIMEOUT,
-            "read_timeout": READ_TIMEOUT,
-            "test_interval": TEST_INTERVAL
+            "connection_timeout_ms": CONNECTION_TIMEOUT_MS,
+            "read_timeout_ms": READ_TIMEOUT_MS,
+            "test_interval_seconds": TEST_INTERVAL_SECONDS
         }
     })
 
@@ -202,8 +206,8 @@ def run_tests():
     
     logger.info("Starting DynamoDB connection test application")
     logger.info(f"Reading from table: {TABLE_NAME}")
-    logger.info(f"Configured for fault injection testing with {CONNECTION_TIMEOUT}s connection timeout")
-    logger.info(f"Expected behavior: Timeouts will occur when injected latency > {CONNECTION_TIMEOUT * 1000}ms")
+    logger.info(f"Configured for fault injection testing with {CONNECTION_TIMEOUT_MS}ms connection timeout")
+    logger.info(f"Expected behavior: Timeouts will occur when injected latency > {CONNECTION_TIMEOUT_MS}ms")
     
     while True:
         total_tests += 1
@@ -219,7 +223,7 @@ def run_tests():
             success_rate = (success_count / total_tests) * 100
             logger.info(f"SUMMARY - Total: {total_tests}, Success: {success_count}, Failed: {failure_count}, Success Rate: {success_rate:.1f}%")
         
-        time.sleep(TEST_INTERVAL)
+        time.sleep(TEST_INTERVAL_SECONDS)
 
 if __name__ == "__main__":
     # Start DynamoDB testing in background thread
