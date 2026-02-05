@@ -1,0 +1,32 @@
+{
+  "description": "Inject 800ms network latency to DynamoDB connections",
+  "targets": {
+    "myTasks": {
+      "resourceType": "aws:ecs:task",
+      "resourceArns": [
+        "arn:aws:ecs:us-east-1:064250592128:task/FIS/TASK_ID"
+      ],
+      "selectionMode": "ALL"
+    }
+  },
+  "actions": {
+    "InjectLatency": {
+      "actionId": "aws:ecs:task-network-latency",
+      "parameters": {
+        "duration": "PT5M",
+        "delayMilliseconds": "800",
+        "jitterMilliseconds": "50",
+        "useEcsFaultInjectionEndpoints": "true"
+      },
+      "targets": {
+        "Tasks": "myTasks"
+      }
+    }
+  },
+  "stopConditions": [
+    {
+      "source": "none"
+    }
+  ],
+  "roleArn": "arn:aws:iam::064250592128:role/fisExperimentRole"
+}
