@@ -4,7 +4,34 @@ This application continuously tests DynamoDB connectivity and reports round trip
 
 ## Setup Steps
 
-### 1. Create IAM Roles
+### 1. Create DynamoDB Table
+
+Create a DynamoDB table for the application to read from:
+
+```bash
+aws dynamodb create-table \
+  --table-name MyTestTable \
+  --attribute-definitions AttributeName=id,AttributeType=S \
+  --key-schema AttributeName=id,KeyType=HASH \
+  --billing-mode PAY_PER_REQUEST \
+  --region us-east-1
+```
+
+Optionally, add some test data:
+
+```bash
+aws dynamodb put-item \
+  --table-name MyTestTable \
+  --item '{"id": {"S": "test1"}, "data": {"S": "Sample data 1"}}' \
+  --region us-east-1
+
+aws dynamodb put-item \
+  --table-name MyTestTable \
+  --item '{"id": {"S": "test2"}, "data": {"S": "Sample data 2"}}' \
+  --region us-east-1
+```
+
+### 2. Create IAM Roles
 
 **Task Execution Role** (ecsTaskExecutionRole):
 ```bash
@@ -41,8 +68,13 @@ aws iam put-role-policy --role-name ecsTaskRole \
     "Statement": [
       {
         "Effect": "Allow",
-        "Action": ["dynamodb:ListTables", "dynamodb:DescribeTable"],
-        "Resource": "*"
+        "Action": [
+          "dynamodb:Scan",
+          "dynamodb:GetItem",
+          "dynamodb:Query",
+          "dynamodb:DescribeTable"
+        ],
+        "Resource": "arn:aws:dynamodb:us-east-1:064250592128:table/MyTestTable"
       },
       {
         "Effect": "Allow",
@@ -130,38 +162,36 @@ aws iam put-role-policy --role-name fisExperimentRole \
   }'
 ```
 
-### 2. Create CloudWatch Log Group
+### 3. Create CloudWatch Log Group
 
 ```bash
 aws logs create-log-group --log-group-name /ecs/dynamodb-latency-test
 ```
 
-### 3. Build and Push Docker Image
+### 4. Build and Push Docker Image
 
 ```bash
 # Create ECR repository
-aws ecr create-repository --repository-name dynamodb-test --region us-east-1
+aws ecr create-repository --repository-name fis-latency-test-to-ddb --region us-east-1
 
 # Login to ECR
 aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 064250592128.dkr.ecr.us-east-1.amazonaws.com
 
 # Build and push
-docker build -t dynamodb-test .
-docker tag dynamodb-test:latest 064250592128.dkr.ecr.us-east-1.amazonaws.com/dynamodb-test:latest
-docker push 064250592128.dkr.ecr.us-east-1.amazonaws.com/dynamodb-test:latest
+docker build -t fis-latency-test-to-ddb .
+docker tag fis-latency-test-to-ddb:latest 064250592128.dkr.ecr.us-east-1.amazonaws.com/fis-latency-test-to-ddb:latest
+docker push 064250592128.dkr.ecr.us-east-1.amazonaws.com/fis-latency-test-to-ddb:latest
 ```
 
-### 4. Register Task Definition
+### 5. Register Task Definition
 
 The task definition is already configured for:
 - Account: 064250592128
 - Region: us-east-1
 - Cluster: FIS
 
-### 5. Register Task Definition
-
 ```bash
-aws ecs register-task-definition --cli-input-json file://task-definition.json
+aws ecs register-task-definition --region us-east-1 --cli-input-json file://task-definition.json
 ```
 
 ### 6. Run the Task
@@ -171,12 +201,127 @@ aws ecs run-task \
   --cluster FIS \
   --launch-type FARGATE \
   --task-definition dynamodb-latency-test \
-  --network-configuration "awsvpcConfiguration={subnets=[subnet-xxx],securityGroups=[sg-xxx],assignPublicIp=ENABLED}"
+  --network-configuration "awsvpcConfiguration={subnets=[subnet-074e81a195f80085b,subnet-0ba641874c881911e,	
+subnet-0a8a02552b56e8441],securityGroups=[sg-063a086776564b8ce],assignPublicIp=ENABLED}" \
+  --region us-east-1
 ```
 
 Note: Replace subnet-xxx and sg-xxx with your actual subnet and security group IDs.
 
-### 7. View Logs
+### 7. Create Network Load Balancer (NLB) and ECS Service
+
+**Step 7.1: Create Target Group**
+
+```bash
+# Create target group for ECS service
+aws elbv2 create-target-group \
+  --name dynamodb-test-tg \
+  --protocol TCP \
+  --port 80 \
+  --vpc-id vpc-03630343ff89a1161 \
+  --target-type ip \
+  --health-check-enabled \
+  --health-check-protocol TCP \
+  --health-check-interval-seconds 30 \
+  --healthy-threshold-count 2 \
+  --unhealthy-threshold-count 2 \
+  --region us-east-1
+
+# Note the TargetGroupArn from the output
+```
+
+**Step 7.2: Create Network Load Balancer**
+
+```bash
+# Create NLB (use at least 2 subnets in different AZs)
+aws elbv2 create-load-balancer \
+  --name dynamodb-test-nlb \
+  --type network \
+  --scheme internet-facing \
+  --subnets subnet-074e81a195f80085b subnet-0ba641874c881911e \
+  --region us-east-1
+
+# Note the LoadBalancerArn from the output
+```
+
+**Step 7.3: Create Listener**
+
+```bash
+# Create listener to forward traffic to target group
+# Replace the ARNs with actual values from previous commands
+aws elbv2 create-listener \
+  --load-balancer-arn arn:aws:elasticloadbalancing:us-east-1:064250592128:loadbalancer/net/dynamodb-test-nlb/7897fc06ba9f2b32 \
+  --protocol TCP \
+  --port 80 \
+  --default-actions Type=forward,TargetGroupArn=arn:aws:elasticloadbalancing:us-east-1:064250592128:targetgroup/dynamodb-test-tg/8bbecc9680ab0a36 \
+  --region us-east-1
+```
+
+**Step 7.4: Create ECS Service with NLB**
+
+```bash
+# Create ECS service with load balancer integration
+# Replace target group ARN with actual value
+aws ecs create-service \
+  --cluster FIS \
+  --service-name dynamodb-test-service \
+  --task-definition dynamodb-latency-test \
+  --desired-count 1 \
+  --launch-type FARGATE \
+  --network-configuration "awsvpcConfiguration={subnets=[subnet-074e81a195f80085b,subnet-0ba641874c881911e,subnet-0a8a02552b56e8441],securityGroups=[sg-063a086776564b8ce],assignPublicIp=ENABLED}" \
+  --load-balancers "targetGroupArn=arn:aws:elasticloadbalancing:us-east-1:064250592128:targetgroup/dynamodb-test-tg/8bbecc9680ab0a36,containerName=fis-latency-test-to-ddb-app,containerPort=80" \
+  --health-check-grace-period-seconds 60 \
+  --region us-east-1
+```
+
+**Step 7.5: Get NLB DNS Name**
+
+```bash
+# Get the DNS name to access your service
+aws elbv2 describe-load-balancers \
+  --names dynamodb-test-nlb \
+  --query 'LoadBalancers[0].DNSName' \
+  --output text \
+  --region us-east-1
+```
+
+**Update Service (if needed):**
+
+```bash
+# Update service with new task definition or desired count
+aws ecs update-service \
+  --cluster FIS \
+  --service dynamodb-test-service \
+  --task-definition dynamodb-latency-test \
+  --desired-count 3 \
+  --region us-east-1
+```
+
+**Delete Service (if needed):**
+
+```bash
+# Scale down to 0 first
+aws ecs update-service \
+  --cluster FIS \
+  --service dynamodb-test-service \
+  --desired-count 0 \
+  --region us-east-1
+
+# Then delete the service
+aws ecs delete-service \
+  --cluster FIS \
+  --service dynamodb-test-service \
+  --region us-east-1
+```
+
+**Important Notes:**
+- Replace vpc-xxx with your actual VPC ID
+- The security group (sg-063a086776564b8ce) must allow inbound traffic on port 80
+- Use at least 2 subnets in different availability zones for NLB
+- The application currently doesn't expose an HTTP endpoint on port 80, so you may want to add a Flask/FastAPI web server with a health check endpoint for the NLB to properly route traffic
+- For fault injection testing on services, you can target all tasks in the service instead of individual task ARNs
+
+### 8. View Logs
 
 ```bash
 aws logs tail /ecs/dynamodb-latency-test --follow
@@ -256,6 +401,7 @@ The application supports the following environment variables for timeout configu
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `TABLE_NAME` | MyTestTable | Name of the DynamoDB table to read from |
 | `CONNECTION_TIMEOUT` | 5.0 | Connection timeout in seconds (time to establish connection) |
 | `READ_TIMEOUT` | 5.0 | Read timeout in seconds (time to receive response) |
 | `TEST_INTERVAL` | 5 | Seconds between each DynamoDB connection test |

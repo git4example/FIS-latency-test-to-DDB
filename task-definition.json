@@ -10,9 +10,15 @@
   "enableFaultInjection": true,
   "containerDefinitions": [
     {
-      "name": "dynamodb-test-app",
-      "image": "064250592128.dkr.ecr.us-east-1.amazonaws.com/dynamodb-test:latest",
+      "name": "fis-latency-test-to-ddb-app",
+      "image": "064250592128.dkr.ecr.us-east-1.amazonaws.com/fis-latency-test-to-ddb:latest",
       "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 80,
+          "protocol": "tcp"
+        }
+      ],
       "environment": [
         {
           "name": "CONNECTION_TIMEOUT",
