@@ -100,6 +100,12 @@ def health_check():
         "success_rate": f"{(success_count / total_tests * 100):.1f}%" if total_tests > 0 else "0%"
     }
     
+    # Log health check results for debugging
+    if is_healthy:
+        logger.info(f"HEALTH CHECK - PASSED (200) - Last success: {last_success_time}, Total tests: {total_tests}, Success rate: {response['success_rate']}")
+    else:
+        logger.warning(f"HEALTH CHECK - FAILED (503) - Last success: {last_success_time}, Last error: {last_error}, Total tests: {total_tests}")
+    
     return jsonify(response), status_code
 
 @app.route('/test', methods=['GET'])
