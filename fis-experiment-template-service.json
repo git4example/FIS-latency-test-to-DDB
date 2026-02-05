@@ -3,15 +3,10 @@
   "targets": {
     "myTasks": {
       "resourceType": "aws:ecs:task",
-      "resourceTags": {
-        "aws:ecs:serviceName": "dynamodb-test-service"
+      "parameters": {
+        "cluster": "FIS",
+        "service": "dynamodb-test-service"
       },
-      "filters": [
-        {
-          "path": "Cluster",
-          "values": ["FIS"]
-        }
-      ],
       "selectionMode": "ALL"
     }
   },
